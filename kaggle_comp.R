@@ -8,9 +8,8 @@ library(stringr)
 # https://www.kaggle.com/wiki/Leakage
 
 # Data load ----------------------------------
-
-setwd("workspace/facultate/DM")
-df <- read_csv("Datasets/KobeBryant/data.csv")
+setwd("workspace/facultate/DM/kobe-bryant-stats/")
+df <- read_csv("data.csv")
 
 # Data repair ---------------------------------
 
@@ -26,21 +25,28 @@ df <- df %>%
   mutate(opponent = replace(opponent, opponent == "NOP", "NOH")) %>%
   mutate(matchup = paste("LAL @ ", opponent, sep = ""))
 
+# Injuries that kept him on he bench:
+# https://pbs.twimg.com/media/BioEZffCAAAIJwr.png
+# Worth noting: 99-00, 03-04, 04-05,13-14
+
 # Data enrichment ------------------------------
 
 # Supplimetary CSV with team names abbreviations
 # https://sportsdelve.wordpress.com/abbreviations/
 
-full_names_df <- read_csv("Datasets/KobeBryant/team_names.csv")
+full_names_df <- read_csv("team_names.csv")
 df <- df %>%
   left_join(full_names_df) %>%
   mutate(shot_value = as.numeric(substring(shot_type, 1, 1)))
 
 
 
-
 # Insights -----------------------------------
 
+games_per_season <- df %>%
+  group_by(season) %>%
+  distinct(game_id) %>%
+  summarise(games = n())
 
 seasonal_stats <- df %>%
   filter(!is.na(shot_made_flag)) %>%
@@ -48,29 +54,35 @@ seasonal_stats <- df %>%
   summarise(count = n()) %>%
   spread(shot_made_flag, count) %>%
   mutate(shots_total = `1` + `0`) %>%
-  mutate(percentage = 100 * (`1` / (`1` + `0`))) %>%
+  mutate(shot_accuracy = 100 * (`1` / (`1` + `0`))) %>%
+  ungroup() %>%
+  inner_join(games_per_season) %>%
+  mutate(success_per_game = shots_success / games)
   select(
+    season,
+    games,
     shots_success = `1`,
     shots_fail = `0`,
     shots_total,
-    percentage
+    shot_accuracy
   )
 
+seasonal_stats
 
 # Visualizations -----------------------------------
 
-seasonal_shots_graph <- plot_ly(seasonal_stats,
+seasonal_stats_graph <- plot_ly(seasonal_stats,
   x = ~ `season`,
   y = ~ shots_success,
   type = "bar",
-  color = ~ `percentage`,
+  color = ~ `shot_accuracy`,
   hoverinfo = "text",
   text = ~ paste(
     "Full stats, season ", season, "</br>:",
     "</br> Total shots: ", shots_total,
     "</br> Failed shots: ", shots_fail,
     "</br> Success shots: ", shots_success,
-    "</br> Percentage: ", round(percentage, 2), "%"
+    "</br> Percentage: ", round(shot_accuracy, 2), "%"
   )
 ) %>%
   layout(
@@ -79,3 +91,8 @@ seasonal_shots_graph <- plot_ly(seasonal_stats,
       title = "# of succesful shots"
     )
   )
+
+seasonal_stats_graph
+
+
+#-----------------
