@@ -40,7 +40,6 @@ df <- df %>%
   mutate(shot_value = as.numeric(substring(shot_type, 1, 1)))
 
 
-
 # Insights -----------------------------------
 
 games_per_season <- df %>%
@@ -57,14 +56,15 @@ seasonal_stats <- df %>%
   mutate(shot_accuracy = 100 * (`1` / (`1` + `0`))) %>%
   ungroup() %>%
   inner_join(games_per_season) %>%
-  mutate(success_per_game = shots_success / games)
+  mutate(success_per_game = `1` / games) %>%
   select(
     season,
     games,
     shots_success = `1`,
     shots_fail = `0`,
     shots_total,
-    shot_accuracy
+    shot_accuracy,
+    success_per_game
   )
 
 seasonal_stats
