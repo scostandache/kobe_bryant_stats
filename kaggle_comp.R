@@ -3,6 +3,9 @@ library(dplyr)
 library(plotly)
 library(tidyr)
 library(stringr)
+library(corrr)
+library(polycor)
+library(arules)
 
 # !!!! only train on events that occured prior to the shot being predicted
 # https://www.kaggle.com/wiki/Leakage
@@ -22,8 +25,9 @@ df <- read_csv("data.csv")
 
 df <- df %>%
   mutate(opponent = replace(opponent, opponent == "BKN", "NJN")) %>%
-  mutate(opponent = replace(opponent, opponent == "NOP", "NOH")) %>%
-  mutate(matchup = paste("LAL @ ", opponent, sep = ""))
+  mutate(opponent = replace(opponent, opponent == "NOP", "NOH")) %>% 
+  rowwise() %>%
+  mutate(home_match = grepl('vs', matchup))
 
 # Injuries that kept him on he bench:
 # https://pbs.twimg.com/media/BioEZffCAAAIJwr.png
@@ -36,6 +40,7 @@ df <- df %>%
 
 full_names_df <- read_csv("team_names.csv")
 df <- df %>%
+  filter(!is.na(shot_made_flag)) %>%
   left_join(full_names_df) %>%
   mutate(shot_value = as.numeric(substring(shot_type, 1, 1)))
 
@@ -48,7 +53,6 @@ games_per_season <- df %>%
   summarise(games = n())
 
 seasonal_stats <- df %>%
-  filter(!is.na(shot_made_flag)) %>%
   group_by(season, shot_made_flag) %>%
   summarise(count = n()) %>%
   spread(shot_made_flag, count) %>%
@@ -69,8 +73,48 @@ seasonal_stats <- df %>%
 
 seasonal_stats
 
+
+
+action_type_stats <- df %>% 
+  mutate(shot_made_flag = as.numeric(shot_made_flag)) %>% 
+  group_by(action_type, shot_made_flag) %>%
+  summarise(count = n()) %>%
+  spread(shot_made_flag, count)  %>%
+  mutate_all(funs(replace(., is.na(.), 0)))
+
+
+#Correlations ------------------------
+
+## !!! t test or mean 
+#!! Box plots
+
+cor(df$shot_distance, df$shot_made_flag)
+cor(df$shot_value, df$shot_made_flag)
+cor(df$loc_x, df$shot_made_flag)
+cor(df$loc_y, df$shot_made_flag)
+
+df %>%
+  group_by(shot_zone_area, shot_made_flag) %>%
+  summarise( count = n())
+
+colnames(df)
+
+
+#Locations heatmap
+
+df %>%
+   group_by(loc_x, loc_y) %>%
+   summarize(count = n())
+
 # Visualizations -----------------------------------
 
+# Action type bar chart
+df %>% 
+  group_by(action_type) %>% 
+  summarise( count =n()) %>% 
+  plot_ly(y=~count, type="bar",hoverinfo="text", text=(~action_type))
+
+#Shots stats by season
 seasonal_stats_graph <- plot_ly(seasonal_stats,
   x = ~ `season`,
   y = ~ shots_success,
@@ -95,4 +139,22 @@ seasonal_stats_graph <- plot_ly(seasonal_stats,
 seasonal_stats_graph
 
 
-#-----------------
+
+# Arules transactions --------------------------
+
+
+trans_df <- data_frame(
+  action_type = as.factor(df$action_type),
+  combined_shot = as.factor(df$combined_shot_type),
+  shot_distance = as.factor(df$shot_distance),
+  period = as.factor(df$period),
+  shot_made_flag = as.factor(df$shot_made_flag)
+)
+
+
+trans_df <- as(trans_df, "transactions")
+
+inspect(trans_df[1:5])
+apriori(trans_df, parameter=list(support = 0.5))
+
+support(trans_df$action_type)
