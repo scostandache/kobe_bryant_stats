@@ -6,6 +6,8 @@ library(stringr)
 library(corrr)
 library(polycor)
 library(arules)
+library(dbscan)
+library(ggplot2)
 
 # !!!! only train on events that occured prior to the shot being predicted
 # https://www.kaggle.com/wiki/Leakage
@@ -139,6 +141,21 @@ seasonal_stats_graph <- plot_ly(seasonal_stats,
 seasonal_stats_graph
 
 
+#Heatmap ---------------------
+
+loc_df <- df %>% select(loc_x,loc_y,shot_made_flag)
+loc_df %>% 
+  group_by(loc_x, loc_y,shot_made_flag) %>% 
+  summarize(count = n()) %>%
+  spread(shot_made_flag, count) %>%
+  arrange(desc(`1`)) %>%
+  mutate_all(funs(replace(.,is.na(.),0))) %>%
+  rowwise()%>%
+  mutate(percentage = `1`/(`1`+`0`)) %>%
+  plot_ly(x=~loc_x, y=~loc_y, z=~percentage, type="heatmap")
+
+
+
 
 # Arules transactions --------------------------
 
@@ -158,3 +175,5 @@ inspect(trans_df[1:5])
 apriori(trans_df, parameter=list(support = 0.5))
 
 support(trans_df$action_type)
+
+
