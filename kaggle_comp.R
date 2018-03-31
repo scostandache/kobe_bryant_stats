@@ -3,11 +3,12 @@ library(dplyr)
 library(plotly)
 library(tidyr)
 library(stringr)
-library(corrr)
 library(polycor)
 library(arules)
-library(dbscan)
 library(ggplot2)
+library(shiny)
+library(magrittr)
+library(viridisLite)
 
 # !!!! only train on events that occured prior to the shot being predicted
 # https://www.kaggle.com/wiki/Leakage
@@ -27,9 +28,9 @@ df <- read_csv("data.csv")
 
 df <- df %>%
   mutate(opponent = replace(opponent, opponent == "BKN", "NJN")) %>%
-  mutate(opponent = replace(opponent, opponent == "NOP", "NOH")) %>% 
+  mutate(opponent = replace(opponent, opponent == "NOP", "NOH")) %>%
   rowwise() %>%
-  mutate(home_match = grepl('vs', matchup))
+  mutate(home_match = grepl("vs", matchup))
 
 # Injuries that kept him on he bench:
 # https://pbs.twimg.com/media/BioEZffCAAAIJwr.png
@@ -55,6 +56,7 @@ games_per_season <- df %>%
   summarise(games = n())
 
 seasonal_stats <- df %>%
+  filter(home_match == TRUE) %>%
   group_by(season, shot_made_flag) %>%
   summarise(count = n()) %>%
   spread(shot_made_flag, count) %>%
@@ -76,19 +78,18 @@ seasonal_stats <- df %>%
 seasonal_stats
 
 
-
-action_type_stats <- df %>% 
-  mutate(shot_made_flag = as.numeric(shot_made_flag)) %>% 
+action_type_stats <- df %>%
+  mutate(shot_made_flag = as.numeric(shot_made_flag)) %>%
   group_by(action_type, shot_made_flag) %>%
   summarise(count = n()) %>%
-  spread(shot_made_flag, count)  %>%
+  spread(shot_made_flag, count) %>%
   mutate_all(funs(replace(., is.na(.), 0)))
 
 
-#Correlations ------------------------
+# Correlations ------------------------
 
-## !!! t test or mean 
-#!! Box plots
+## !!! t test or mean
+# !! Box plots
 
 cor(df$shot_distance, df$shot_made_flag)
 cor(df$shot_value, df$shot_made_flag)
@@ -97,26 +98,19 @@ cor(df$loc_y, df$shot_made_flag)
 
 df %>%
   group_by(shot_zone_area, shot_made_flag) %>%
-  summarise( count = n())
+  summarise(count = n())
 
 colnames(df)
-
-
-#Locations heatmap
-
-df %>%
-   group_by(loc_x, loc_y) %>%
-   summarize(count = n())
 
 # Visualizations -----------------------------------
 
 # Action type bar chart
-df %>% 
-  group_by(action_type) %>% 
-  summarise( count =n()) %>% 
-  plot_ly(y=~count, type="bar",hoverinfo="text", text=(~action_type))
+df %>%
+  group_by(action_type) %>%
+  summarise(count = n()) %>%
+  plot_ly(y = ~ count, type = "bar", hoverinfo = "text", text = (~ action_type))
 
-#Shots stats by season
+# Shots stats by season
 seasonal_stats_graph <- plot_ly(seasonal_stats,
   x = ~ `season`,
   y = ~ shots_success,
@@ -141,19 +135,92 @@ seasonal_stats_graph <- plot_ly(seasonal_stats,
 seasonal_stats_graph
 
 
-#Heatmap ---------------------
+# Boxplots
 
-loc_df <- df %>% select(loc_x,loc_y,shot_made_flag)
-loc_df %>% 
-  group_by(loc_x, loc_y,shot_made_flag) %>% 
+
+
+# Scatterplot
+loc_df <- df %>%
+  select(loc_x, loc_y, shot_made_flag) %>%
+  group_by(loc_x, loc_y, shot_made_flag) %>%
   summarize(count = n()) %>%
   spread(shot_made_flag, count) %>%
   arrange(desc(`1`)) %>%
-  mutate_all(funs(replace(.,is.na(.),0))) %>%
-  rowwise()%>%
-  mutate(percentage = `1`/(`1`+`0`)) %>%
-  plot_ly(x=~loc_x, y=~loc_y, z=~percentage, type="heatmap")
+  mutate_all(funs(replace(., is.na(.), 0))) %>%
+  rowwise() %>%
+  mutate(percentage = `1` / (`1` + `0`)) %>%
+  plot_ly(
+    x = ~ loc_x,
+    y = ~ loc_y,
+    color = ~ percentage,
+    type = "scatter"
+  )
+loc_df
 
+# Shot frequency heatmap
+inferno_colors <- inferno(100)
+
+df %>%
+  filter(abs(loc_x) > 1, abs(loc_y) > 1) %>%
+  ggplot() +
+  stat_density_2d(
+    aes(
+      x = loc_x, y = loc_y,
+      fill = ..density..
+    ),
+    geom = "raster", contour = FALSE, interpolate = TRUE, n = 200
+  ) +
+  scale_fill_gradientn(colors = inferno_colors, guide = FALSE)
+
+
+# Hexplot
+
+ggplot(data = df) +
+  geom_hex(aes(x = loc_x, y = loc_y), binwidth = c(15, 15)) +
+  scale_fill_gradient(trans = "log", low = "blue", high = "red") +
+  facet_wrap(~ shot_made_flag) +
+  coord_fixed() +
+  ggtitle("Misses vs makes")
+ggsave("misses_vs_makes.png")
+
+
+# Bubble chart of accuracy percentages
+
+loc_matrix <- as.matrix(cbind(df$loc_x, df$loc_y))
+loc_cluster <- kmeans(loc_matrix, centers = 500)
+df$loc_cluster <- loc_cluster$cluster
+
+
+cluster_percentages <- df %>%
+  group_by(loc_cluster, shot_made_flag) %>%
+  summarize(count = n()) %>%
+  spread(shot_made_flag, count) %>%
+  mutate_all(funs(replace(., is.na(.), 0))) %>%
+  mutate(total = as.integer(`1` + `0`)) %>%
+  mutate(percentage = `1` / total)
+cluster_percentages$center_x <- loc_cluster$centers[, 1]
+cluster_percentages$center_y <- loc_cluster$centers[, 2]
+
+cluster_percentages %>%
+  arrange(desc(total))
+
+cluster_percentages %>%
+  mutate(reg_total = log(total)) %>%
+  plot_ly(
+    x = ~ center_x,
+    y = ~ center_y,
+    type = "scatter",
+    mode = "markers",
+    color = ~ percentage,
+    colors = "Reds",
+    marker = list(
+      size = ~ reg_total * 1.5,
+      opacity = ~ percentage * 3
+    )
+  ) %>%
+  layout(
+    plot_bgcolor = "rgb(120,120,120)"
+  )
 
 
 
@@ -172,8 +239,11 @@ trans_df <- data_frame(
 trans_df <- as(trans_df, "transactions")
 
 inspect(trans_df[1:5])
-apriori(trans_df, parameter=list(support = 0.5))
+apriori(trans_df, parameter = list(support = 0.5))
 
 support(trans_df$action_type)
 
 
+
+
+# Sandbox -----------
