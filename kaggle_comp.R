@@ -14,8 +14,8 @@ library(viridisLite)
 # https://www.kaggle.com/wiki/Leakage
 
 # Data load ----------------------------------
-setwd("workspace/facultate/DM/kobe-bryant-stats/")
-df <- read_csv("data.csv")
+# setwd("workspace/facultate/DM/kobe-bryant-stats/")
+df <- read_csv(url("https://raw.githubusercontent.com/serbanc94/kobe_bryant_stats/master/data.csv"))
 
 # Data repair ---------------------------------
 
@@ -41,11 +41,13 @@ df <- df %>%
 # Supplimetary CSV with team names abbreviations
 # https://sportsdelve.wordpress.com/abbreviations/
 
-full_names_df <- read_csv("team_names.csv")
+full_names_df <- read_csv(url("https://raw.githubusercontent.com/serbanc94/kobe_bryant_stats/master/team_names.csv"))
+shot_dist_mean <- mean(df$shot_distance)
 df <- df %>%
   filter(!is.na(shot_made_flag)) %>%
   left_join(full_names_df) %>%
-  mutate(shot_value = as.numeric(substring(shot_type, 1, 1)))
+  mutate(shot_value = as.numeric(substring(shot_type, 1, 1))) %>%
+  mutate(short_distance = (shot_distance <= shot_dist_mean))
 
 
 # Insights -----------------------------------
@@ -95,6 +97,9 @@ cor(df$shot_distance, df$shot_made_flag)
 cor(df$shot_value, df$shot_made_flag)
 cor(df$loc_x, df$shot_made_flag)
 cor(df$loc_y, df$shot_made_flag)
+cor(df$home_match, df$shot_made_flag)
+cor(df$period, df$shot_made_flag)
+cor(df$short_distance, df$shot_made_flag)
 
 df %>%
   group_by(shot_zone_area, shot_made_flag) %>%
@@ -133,11 +138,6 @@ seasonal_stats_graph <- plot_ly(seasonal_stats,
   )
 
 seasonal_stats_graph
-
-
-# Boxplots
-
-
 
 # Scatterplot
 loc_df <- df %>%
@@ -202,9 +202,6 @@ cluster_percentages$center_x <- loc_cluster$centers[, 1]
 cluster_percentages$center_y <- loc_cluster$centers[, 2]
 
 cluster_percentages %>%
-  arrange(desc(total))
-
-cluster_percentages %>%
   mutate(reg_total = log(total)) %>%
   plot_ly(
     x = ~ center_x,
@@ -230,20 +227,20 @@ cluster_percentages %>%
 trans_df <- data_frame(
   action_type = as.factor(df$action_type),
   combined_shot = as.factor(df$combined_shot_type),
-  shot_distance = as.factor(df$shot_distance),
+  short_distance = as.factor(df$short_distance),
   period = as.factor(df$period),
+  home_match = as.factor(df$home_match),
   shot_made_flag = as.factor(df$shot_made_flag)
 )
 
 
 trans_df <- as(trans_df, "transactions")
 
-inspect(trans_df[1:5])
-apriori(trans_df, parameter = list(support = 0.5))
-
-support(trans_df$action_type)
-
-
+inspect(trans_df[1:20])
+rules <- apriori(trans_df, 
+                 parameter = list(support = 0.01, target="rules", conf = 0.5), 
+                 appearance = list(rhs='shot_made_flag=0'))
+inspect(sort(rules, decreasing = TRUE, by="confidence"))
 
 
 # Sandbox -----------
