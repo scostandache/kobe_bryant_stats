@@ -5,6 +5,7 @@ library(tidyr)
 library(stringr)
 library(polycor)
 library(arules)
+library(arulesViz)
 library(ggplot2)
 library(shiny)
 library(magrittr)
@@ -226,7 +227,7 @@ cluster_percentages %>%
 
 trans_df <- data_frame(
   action_type = as.factor(df$action_type),
-  combined_shot = as.factor(df$combined_shot_type),
+  #combined_shot = as.factor(df$combined_shot_type),
   short_distance = as.factor(df$short_distance),
   period = as.factor(df$period),
   home_match = as.factor(df$home_match),
@@ -238,9 +239,12 @@ trans_df <- as(trans_df, "transactions")
 
 inspect(trans_df[1:20])
 rules <- apriori(trans_df, 
-                 parameter = list(support = 0.01, target="rules", conf = 0.5), 
+                 parameter = list(support = 0.25, target="rules", conf = 0.4, minlen =2), 
                  appearance = list(rhs='shot_made_flag=0'))
 inspect(sort(rules, decreasing = TRUE, by="confidence"))
+plot(rules, method= "graph")
+plot(rules)
 
+## arules viz interactive graphics
 
 # Sandbox -----------
