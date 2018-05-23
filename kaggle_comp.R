@@ -10,6 +10,16 @@ library(ggplot2)
 library(shiny)
 library(magrittr)
 library(viridisLite)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(RColorBrewer)
+library(Matrix)
+library(xgboost)
+library(caret)
+library(tidyverse)
+library(DataExplorer)
+library(gmodels)
 
 # !!!! only train on events that occured prior to the shot being predicted
 # https://www.kaggle.com/wiki/Leakage
@@ -226,25 +236,174 @@ cluster_percentages %>%
 
 
 trans_df <- data_frame(
-  action_type = as.factor(df$action_type),
-  #combined_shot = as.factor(df$combined_shot_type),
-  short_distance = as.factor(df$short_distance),
+  # action_type = as.factor(df$action_type),
+  # combined_shot = as.factor(df$combined_shot_type),
+  # short_distance = as.factor(df$short_distance),
   period = as.factor(df$period),
-  home_match = as.factor(df$home_match),
-  shot_made_flag = as.factor(df$shot_made_flag)
+  # home_match = as.factor(df$home_match),
+  shot_made_flag = as.factor(df$shot_made_flag),
+  shot_zone_range = as.factor(df$shot_zone_range)
 )
 
 
 trans_df <- as(trans_df, "transactions")
 
 inspect(trans_df[1:20])
-rules <- apriori(trans_df, 
-                 parameter = list(support = 0.25, target="rules", conf = 0.4, minlen =2), 
-                 appearance = list(rhs='shot_made_flag=0'))
-inspect(sort(rules, decreasing = TRUE, by="confidence"))
-plot(rules, method= "graph")
-plot(rules)
+rules <- apriori(trans_df,
+  parameter = list(support = 0.05, target = "rules", conf = 0.4, minlen = 2),
+  appearance = list(rhs = "shot_made_flag=1")
+)
+inspect(sort(rules, decreasing = TRUE, by = "confidence"))
+plot(rules, method = "graph")
+plotly_arules(rules)
 
-## arules viz interactive graphics
+# Decision trees --------------------
 
-# Sandbox -----------
+dtree_df <- df %>%
+  mutate(shot_distance = ifelse(shot_distance > 45, 45, shot_distance))
+fit <- rpart(shot_made_flag ~ minutes_remaining + home_match + shot_value + playoffs + shot_zone_basic, method = "class", data = df)
+fancyRpartPlot(fit)
+
+
+# XGBoost ---------------------------
+
+raw_df <- read_csv(url("https://raw.githubusercontent.com/serbanc94/kobe_bryant_stats/master/data.csv"))
+raw_df <- raw_df %>%
+  mutate(shot_distance = ifelse(shot_distance > 45, 45, shot_distance)) %>%
+  mutate(time_remaining = minutes_remaining * 60 + seconds_remaining) %>%
+  mutate(
+    seconds_remaining = NULL,
+    team_name = NULL,
+    team_id = NULL,
+    game_event_id = NULL,
+    game_id = NULL,
+    lat = NULL,
+    lon = NULL
+  ) %>%
+  select(-c(opponent, matchup, season))
+
+train_df <- raw_df %>%
+  filter(!is.na(shot_made_flag)) %>%
+  mutate(
+    id = shot_id,
+    shot_id = NULL
+  ) %>%
+  mutate(
+    y = shot_made_flag,
+    shot_made_flag = NULL
+  )
+
+train_dmy <- dummyVars(" ~ .", data = train_df)
+train_sf <- predict(train_dmy, newdata = train_df)
+
+test_df <- raw_df %>%
+  filter(is.na(shot_made_flag)) %>%
+  mutate(
+    id = shot_id,
+    shot_id = NULL,
+    shot_made_flag = NULL
+  )
+
+test_dmy <- dummyVars(" ~ .", data = test_df)
+test_sf <- predict(test_dmy, newdata = test_df)
+
+trainM <- data.matrix(train_sf, rownames.force = NA)
+xgb_dtrain <- xgb.DMatrix(data = trainM, label = train_df$y, missing = NaN)
+
+watchlist <- list(trainM = xgb_dtrain)
+
+set.seed(1984)
+
+param <- list(
+  objective = "binary:logistic",
+  booster = "gbtree",
+  eval_metric = "logloss",
+  eta = 0.0005,
+  max_depth = 100,
+  subsample = 0.7,
+  colsample_bytree = 0.5,
+  nthread = 8
+)
+system.time(
+  clf <- xgb.cv(
+    params = param,
+    data = xgb_dtrain,
+    nrounds = 5000,
+    verbose = 1,
+    watchlist = watchlist,
+    maximize = FALSE,
+    nfold = 5,
+    early_stopping_rounds = 10,
+    print.every.n = 1,
+    prediction = TRUE
+  )
+)
+
+
+clf <- xgb.train(
+  params = param,
+  data = xgb_dtrain,
+  nrounds = 1500,
+  verbose = 1,
+  watchlist = watchlist,
+  maximize = FALSE,
+  early_stopping_rounds = 300
+)
+
+
+
+testM <- data.matrix(test_sf, rownames.force = NA)
+preds <- predict(clf, testM)
+
+submission <- data.frame(shot_id = test_df$id, shot_made_flag = preds)
+submission %>%
+  write_csv("submission.csv", col_names = F)
+
+write.csv(submission, "submission.csv", row.names = F)
+
+
+# KNN ------------------------------
+raw_df <- read_csv(url("https://raw.githubusercontent.com/serbanc94/kobe_bryant_stats/master/data.csv"))
+shot_made_flag_class <- raw_df$shot_made_flag
+raw_df <- raw_df %>%
+  mutate(shot_distance = ifelse(shot_distance > 45, 45, shot_distance)) %>%
+  mutate(time_remaining = minutes_remaining * 60 + seconds_remaining) %>%
+  mutate(
+    seconds_remaining = NULL,
+    team_name = NULL,
+    team_id = NULL,
+    game_event_id = NULL,
+    game_id = NULL,
+    lat = NULL,
+    lon = NULL
+  ) %>%
+  select(-c(opponent, matchup, shot_id, season, period, game_date, game_event_id)) %>%
+  mutate_if(is.numeric, scale)
+
+raw_df$shot_made_flag <- shot_made_flag_class
+
+raw_dmy <- dummyVars(" ~ .", data = raw_df)
+raw_sf <- data.frame(predict(raw_dmy, newdata = raw_df))
+
+train_sf <- raw_sf %>% 
+  filter(!is.na(shot_made_flag))
+test_sf <- raw_sf %>% 
+  filter(is.na(shot_made_flag))
+
+
+train_class <- train_sf$shot_made_flag
+train_sf <- train_sf %>%
+    select(-c(shot_made_flag))
+test_sf <- test_sf %>%
+  select(-c(shot_made_flag))
+
+raw_df <- read_csv(url("https://raw.githubusercontent.com/serbanc94/kobe_bryant_stats/master/data.csv"))
+submission <- FNN::knn(train_sf, test_sf, cl=train_class, k=250, prob = TRUE, algorithm=c("kd_tree", "cover_tree", "brute"))
+shot_ids <- raw_df %>% filter(is.na(shot_made_flag)) %>% select(shot_id)
+namex = "shot_id"
+namey = "shot_made_flag"
+df <- data.frame(shot_ids, attr(submission, "prob"))
+names(df) <- c(namex, namey)
+
+write.csv(df, "submission.csv", row.names = F)
+
