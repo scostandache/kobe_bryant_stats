@@ -20,6 +20,9 @@ library(caret)
 library(tidyverse)
 library(DataExplorer)
 library(gmodels)
+library(dbscan)
+library(dendextend)
+library(EMCluster)
 
 # !!!! only train on events that occured prior to the shot being predicted
 # https://www.kaggle.com/wiki/Leakage
@@ -363,8 +366,10 @@ write.csv(submission, "submission.csv", row.names = F)
 
 
 # KNN ------------------------------
-raw_df <- read_csv(url("https://raw.githubusercontent.com/serbanc94/kobe_bryant_stats/master/data.csv"))
+file_csv <- read_csv(url("https://raw.githubusercontent.com/serbanc94/kobe_bryant_stats/master/data.csv"))
+raw_df <- file_csv
 shot_made_flag_class <- raw_df$shot_made_flag
+
 raw_df <- raw_df %>%
   mutate(shot_distance = ifelse(shot_distance > 45, 45, shot_distance)) %>%
   mutate(time_remaining = minutes_remaining * 60 + seconds_remaining) %>%
@@ -377,33 +382,90 @@ raw_df <- raw_df %>%
     lat = NULL,
     lon = NULL
   ) %>%
-  select(-c(opponent, matchup, shot_id, season, period, game_date, game_event_id)) %>%
+  select(-c(opponent, matchup, period, season, game_date, playoffs, shot_id, shot_made_flag)) %>%
   mutate_if(is.numeric, scale)
 
 raw_df$shot_made_flag <- shot_made_flag_class
 
+
 raw_dmy <- dummyVars(" ~ .", data = raw_df)
 raw_sf <- data.frame(predict(raw_dmy, newdata = raw_df))
 
-train_sf <- raw_sf %>% 
+train_sf <- raw_sf %>%
   filter(!is.na(shot_made_flag))
-test_sf <- raw_sf %>% 
+test_sf <- raw_sf %>%
   filter(is.na(shot_made_flag))
-
 
 train_class <- train_sf$shot_made_flag
 train_sf <- train_sf %>%
-    select(-c(shot_made_flag))
+  select(-c(shot_made_flag))
 test_sf <- test_sf %>%
   select(-c(shot_made_flag))
 
-raw_df <- read_csv(url("https://raw.githubusercontent.com/serbanc94/kobe_bryant_stats/master/data.csv"))
-submission <- FNN::knn(train_sf, test_sf, cl=train_class, k=250, prob = TRUE, algorithm=c("kd_tree", "cover_tree", "brute"))
-shot_ids <- raw_df %>% filter(is.na(shot_made_flag)) %>% select(shot_id)
-namex = "shot_id"
-namey = "shot_made_flag"
+raw_df <- file_csv
+submission <- FNN::knn(train_sf, test_sf, cl = train_class, k = 2500, prob = TRUE, algorithm = c("kd_tree", "cover_tree", "brute"))
+shot_ids <- raw_df %>%
+  filter(is.na(shot_made_flag)) %>%
+  select(shot_id)
+namex <- "shot_id"
+namey <- "shot_made_flag"
 df <- data.frame(shot_ids, attr(submission, "prob"))
 names(df) <- c(namex, namey)
 
 write.csv(df, "submission.csv", row.names = F)
+
+
+# Task4 ---------------------------
+
+# DF1
+df1 <- read.table("2d-10c.dat", skip = 3, header = FALSE, col.names = c("X", "Y", "Class"))
+
+#hierarchical clustering
+plot(hclust(dist(df1), method="complete"))
+plot(hclust(dist(df1), method="single"))
+plot(hclust(dist(df1), method="average"))
+plot(hclust(dist(df1), method="ward.D"))
+
+# DBSCAN
+
+dbs <- dbscan(df1, eps = 1)
+df_dbs <- df1
+df_dbs$cluster <- dbs$cluster
+plot_ly(df_dbs, x=~X, y=~Y, color = ~Class)
+plot_ly(df_dbs, x=~X, y=~Y, color = ~cluster)
+
+# K-means
+
+kmns <- kmeans(df1, centers = 10)
+df_kmns <- df1
+df_kmns$cluster <- kmns$cluster
+plot_ly(df_kmns, x=~X, y=~Y, color = ~Class)
+plot_ly(df_kmns, x=~X, y=~Y, color = ~cluster)
+
+# EM
+
+set.seed(1500)
+
+emobj <- simple.init(df1, nclass = 10)
+emcls <- emcluster(df1, emobj, assign.class = TRUE)
+
+df_em <- df1
+df_em$cluster <- emcls$class
+plot_ly(df_em, x=~X, y=~Y, color = ~Class)
+plot_ly(df_em, x=~X, y=~Y, color = ~cluster)
+
+
+
+df2 <- iris %>%
+  mutate(Species = case_when(
+    Species == "setosa" ~ 0,
+    Species == "versicolor" ~ 1,
+    Species == "virginica" ~ 2
+  ))
+
+df3 <- read.delim("order2-3clust.csv", header = FALSE, sep = ",", col.names = c("X", "Y", "Class"))
+
+df4 <- read.delim("smile.csv", header = FALSE, sep = ",", col.names = c("X", "Y", "Class"))
+
+df5 <- read.table("square.data", header = FALSE, col.names = c("X", "Y", "Class"))
 
